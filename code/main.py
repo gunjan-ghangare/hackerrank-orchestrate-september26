@@ -148,6 +148,82 @@ def build_financial_context(user_id, request_id, request_date, profiles, events,
         'payment_options': request_payment_options
     }
 
+def make_rule_based_decision(request, context):
+    """Fallback rule-based decision making."""
+    try:
+        profile = context['profile']
+        current_balance = Decimal(profile['current_available_balance'])
+        minimum_balance = Decimal(profile['minimum_balance_to_keep'])
+        requested_amount = Decimal(request['requested_amount'])
+        request_date = parse_date(request['request_date'])
+        
+        # Simple available amount calculation
+        available_now = max(Decimal('0'), current_balance - minimum_balance)
+        amount_safe = min(available_now, requested_amount)
+        
+        # Determine status and method
+        if amount_safe >= requested_amount:
+            return {
+                'amount_safe_to_pay': float(requested_amount),
+                'affordability_status': 'affordable_now',
+                'recommended_payment_method': 'full_payment',
+                'payment_plan': f"{request['request_date']}:{requested_amount}",
+                'earliest_date_for_full_payment': request['request_date'],
+                'spending_changes_needed': 'none',
+                'decision_explanation': f"Full payment of {requested_amount} is affordable. Current balance {current_balance} minus minimum {minimum_balance} leaves sufficient funds."
+            }
+        elif amount_safe > 0:
+            # Check if partial payment is allowed
+            if request['allows_partial_payment'] == 'true':
+                remaining = requested_amount - amount_safe
+                future_date = format_date(request_date + timedelta(days=30))
+                return {
+                    'amount_safe_to_pay': float(amount_safe),
+                    'affordability_status': 'affordable_with_plan',
+                    'recommended_payment_method': 'partial_payment',
+                    'payment_plan': f"{request['request_date']}:{amount_safe}|{future_date}:{remaining}",
+                    'earliest_date_for_full_payment': future_date,
+                    'spending_changes_needed': 'none',
+                    'decision_explanation': f"Partial payment recommended: {amount_safe} now, {remaining} on {future_date}. Protects minimum balance of {minimum_balance}."
+                }
+            else:
+                # Check installment options
+                payment_methods = profile['payment_methods_user_will_consider'].split('|')
+                if 'installments' in payment_methods and context['payment_options']:
+                    # Use first installment option
+                    option = context['payment_options'][0]
+                    return {
+                        'amount_safe_to_pay': float(amount_safe),
+                        'affordability_status': 'affordable_with_plan',
+                        'recommended_payment_method': 'installments',
+                        'payment_plan': f"{option['first_payment_date']}:{option['payment_amount']}",
+                        'earliest_date_for_full_payment': '',
+                        'spending_changes_needed': 'none',
+                        'decision_explanation': f"Installment plan recommended to spread cost over time while maintaining minimum balance."
+                    }
+        
+        # Not affordable
+        return {
+            'amount_safe_to_pay': float(amount_safe),
+            'affordability_status': 'not_affordable',
+            'recommended_payment_method': 'not_recommended',
+            'payment_plan': 'none',
+            'earliest_date_for_full_payment': '',
+            'spending_changes_needed': 'none',
+            'decision_explanation': f"Request cannot be safely completed. Available: {amount_safe}, Required: {requested_amount}. Would breach minimum balance of {minimum_balance}."
+        }
+    except Exception as e:
+        print(f"Error in rule-based decision: {e}", file=sys.stderr)
+        return {
+            'amount_safe_to_pay': 0,
+            'affordability_status': 'not_affordable',
+            'recommended_payment_method': 'not_recommended',
+            'payment_plan': 'none',
+            'earliest_date_for_full_payment': '',
+            'spending_changes_needed': 'none',
+            'decision_explanation': 'Unable to analyze request due to processing error.'
+        }
+
 def call_claude_for_decision(request, context):
     """Use Claude to make financial decision based on all context."""
     global total_input_tokens, total_output_tokens, request_count
@@ -345,40 +421,56 @@ def main():
         writer.writerows(results)
     
     print(f"\nOutput written to {output_file}")
-    print(f"\nToken Usage Summary:")
-    print(f"Total Requests: {request_count}")
-    print(f"Total Input Tokens: {total_input_tokens}")
-    print(f"Total Output Tokens: {total_output_tokens}")
-    print(f"Average Input Tokens per Request: {total_input_tokens / request_count if request_count > 0 else 0:.2f}")
-    print(f"Average Output Tokens per Request: {total_output_tokens / request_count if request_count > 0 else 0:.2f}")
+    
+    if USE_AI:
+        print(f"\nToken Usage Summary:")
+        print(f"Total Requests: {request_count}")
+        print(f"Total Input Tokens: {total_input_tokens}")
+        print(f"Total Output Tokens: {total_output_tokens}")
+        print(f"Average Input Tokens per Request: {total_input_tokens / request_count if request_count > 0 else 0:.2f}")
+        print(f"Average Output Tokens per Request: {total_output_tokens / request_count if request_count > 0 else 0:.2f}")
+    else:
+        print(f"\nRule-based engine used (no token usage)")
     
     # Write usage report
     os.makedirs('code/evaluation', exist_ok=True)
     with open('code/evaluation/usage_report.md', 'w') as f:
         f.write("# Token Usage and Cost Report\n\n")
-        f.write(f"## Model Information\n")
-        f.write(f"- Provider: Anthropic\n")
-        f.write(f"- Model: claude-3-5-sonnet-20241022\n\n")
-        f.write(f"## Usage Statistics\n")
-        f.write(f"- Total Requests Processed: {len(requests)}\n")
-        f.write(f"- Total Model Calls: {request_count}\n")
-        f.write(f"- Total Input Tokens: {total_input_tokens:,}\n")
-        f.write(f"- Total Output Tokens: {total_output_tokens:,}\n")
-        f.write(f"- Total Tokens: {total_input_tokens + total_output_tokens:,}\n")
-        f.write(f"- Average Input Tokens per Request: {total_input_tokens / len(requests) if len(requests) > 0 else 0:.2f}\n")
-        f.write(f"- Average Output Tokens per Request: {total_output_tokens / len(requests) if len(requests) > 0 else 0:.2f}\n\n")
-        f.write(f"## Cost Estimation\n")
-        # Claude 3.5 Sonnet pricing (as of 2024)
-        input_cost_per_mtok = 3.00  # $3 per million input tokens
-        output_cost_per_mtok = 15.00  # $15 per million output tokens
-        total_input_cost = (total_input_tokens / 1_000_000) * input_cost_per_mtok
-        total_output_cost = (total_output_tokens / 1_000_000) * output_cost_per_mtok
-        total_cost = total_input_cost + total_output_cost
         
-        f.write(f"- Input Cost: ${total_input_cost:.2f}\n")
-        f.write(f"- Output Cost: ${total_output_cost:.2f}\n")
-        f.write(f"- Total Estimated Cost: ${total_cost:.2f}\n")
-        f.write(f"- Cost per Request: ${total_cost / len(requests) if len(requests) > 0 else 0:.4f}\n")
+        if USE_AI:
+            f.write(f"## Model Information\n")
+            f.write(f"- Provider: Anthropic\n")
+            f.write(f"- Model: claude-3-5-sonnet-20241022\n\n")
+            f.write(f"## Usage Statistics\n")
+            f.write(f"- Total Requests Processed: {len(requests)}\n")
+            f.write(f"- Total Model Calls: {request_count}\n")
+            f.write(f"- Total Input Tokens: {total_input_tokens:,}\n")
+            f.write(f"- Total Output Tokens: {total_output_tokens:,}\n")
+            f.write(f"- Total Tokens: {total_input_tokens + total_output_tokens:,}\n")
+            f.write(f"- Average Input Tokens per Request: {total_input_tokens / len(requests) if len(requests) > 0 else 0:.2f}\n")
+            f.write(f"- Average Output Tokens per Request: {total_output_tokens / len(requests) if len(requests) > 0 else 0:.2f}\n\n")
+            f.write(f"## Cost Estimation\n")
+            # Claude 3.5 Sonnet pricing (as of 2024)
+            input_cost_per_mtok = 3.00  # $3 per million input tokens
+            output_cost_per_mtok = 15.00  # $15 per million output tokens
+            total_input_cost = (total_input_tokens / 1_000_000) * input_cost_per_mtok
+            total_output_cost = (total_output_tokens / 1_000_000) * output_cost_per_mtok
+            total_cost = total_input_cost + total_output_cost
+            
+            f.write(f"- Input Cost: ${total_input_cost:.2f}\n")
+            f.write(f"- Output Cost: ${total_output_cost:.2f}\n")
+            f.write(f"- Total Estimated Cost: ${total_cost:.2f}\n")
+            f.write(f"- Cost per Request: ${total_cost / len(requests) if len(requests) > 0 else 0:.4f}\n")
+        else:
+            f.write(f"## Processing Mode\n")
+            f.write(f"- Mode: Rule-based decision engine\n")
+            f.write(f"- Total Requests Processed: {len(requests)}\n")
+            f.write(f"- API Usage: None (no API key provided)\n")
+            f.write(f"- Cost: $0.00\n\n")
+            f.write(f"## Note\n")
+            f.write(f"This run used a rule-based fallback engine. For AI-powered analysis:\n")
+            f.write(f"1. Set ANTHROPIC_API_KEY environment variable\n")
+            f.write(f"2. Re-run the solution\n")
     
     print(f"\nUsage report written to code/evaluation/usage_report.md")
 

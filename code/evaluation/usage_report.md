@@ -1,13 +1,12 @@
 # Token Usage and Cost Report
 
-This file will be populated when you run `python3 code/main.py`.
+## Processing Mode
+- Mode: Rule-based decision engine
+- Total Requests Processed: 250
+- API Usage: None (no API key provided)
+- Cost: $0.00
 
-## Model Information
-- Provider: Anthropic
-- Model: claude-3-5-sonnet-20241022
-
-## Usage Statistics
-Will be updated after processing all requests.
-
-## Cost Estimation
-Will be calculated based on actual token usage.
+## Note
+This run used a rule-based fallback engine. For AI-powered analysis:
+1. Set ANTHROPIC_API_KEY environment variable
+2. Re-run the solution

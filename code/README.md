@@ -21,23 +21,51 @@ This solution uses Claude 3.5 Sonnet to analyze user financial situations and ma
 - Python 3.8 or higher
 - Anthropic API key
 
-### Installation
+### Quick Start
 
-1. Install dependencies:
+From the repository root:
+
+```bash
+# One-time setup
+./setup.sh
+
+# Set your API key
+export ANTHROPIC_API_KEY='your-api-key-here'
+
+# Run the solution
+./run.sh
+```
+
+### Manual Setup
+
+If you prefer manual setup:
+
+1. Create virtual environment:
    ```bash
-   pip install -r requirements.txt
+   python3 -m venv venv
+   source venv/bin/activate
    ```
 
-2. Set your Anthropic API key:
+2. Install dependencies:
+   ```bash
+   pip install -r code/requirements.txt
+   ```
+
+3. Set your Anthropic API key:
    ```bash
    export ANTHROPIC_API_KEY='your-api-key-here'
    ```
 
 ## Running the Solution
 
-From the repository root:
-
+### Option 1: Using the run script (recommended)
 ```bash
+./run.sh
+```
+
+### Option 2: Manual run
+```bash
+source venv/bin/activate
 python3 code/main.py
 ```
 

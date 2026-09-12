@@ -12,10 +12,21 @@ from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
-import anthropic
 
-# Initialize Claude client
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+# Check if API key is available
+USE_AI = os.environ.get("ANTHROPIC_API_KEY") is not None
+
+if USE_AI:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        print("✅ AI mode enabled (Claude 3.5 Sonnet)")
+    except ImportError:
+        print("⚠️  anthropic package not found, falling back to rule-based mode")
+        USE_AI = False
+else:
+    print("ℹ️  No API key found, using rule-based decision engine")
+    print("   Set ANTHROPIC_API_KEY for AI-powered analysis")
 
 # Token tracking
 total_input_tokens = 0
@@ -44,8 +55,12 @@ def to_decimal(value):
     return Decimal(str(value))
 
 def extract_amount_from_image(image_path):
-    """Extract amount from image using Claude Vision."""
+    """Extract amount from image using Claude Vision or OCR fallback."""
     global total_input_tokens, total_output_tokens
+    
+    if not USE_AI:
+        # Fallback: skip image extraction
+        return None
     
     try:
         import base64
@@ -136,6 +151,9 @@ def build_financial_context(user_id, request_id, request_date, profiles, events,
 def call_claude_for_decision(request, context):
     """Use Claude to make financial decision based on all context."""
     global total_input_tokens, total_output_tokens, request_count
+    
+    if not USE_AI:
+        return make_rule_based_decision(request, context)
     
     # Build comprehensive prompt
     prompt = f"""You are an expert financial advisor analyzing a user's ability to afford an expense.
